@@ -12,7 +12,7 @@ const http = require('node:http')
 
 const PORT = process.env.PORT || 8791
 const BRIDGE_SECRET = process.env.JARVIS_BRIDGE_SECRET || ''
-const GATEWAY_URL = process.env.GATEWAY_URL || 'http://openclaw-kx5x-openclaw-1:18789'
+const GATEWAY_URL = process.env.GATEWAY_URL || 'http://openclaw-kx5x-openclaw-1:48234'
 const HOOKS_PATH = process.env.HOOKS_PATH || '/hooks-prs-abertas'
 const HOOKS_TOKEN = process.env.HOOKS_TOKEN || ''
 
