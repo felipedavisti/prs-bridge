@@ -1,9 +1,10 @@
 // prs-bridge — ponte fina entre o pr-webhook (Supabase) e o Gateway do Jarvis.
 //
 // Único trabalho deste serviço: receber um POST autenticado por um segredo
-// PRÓPRIO (JARVIS_BRIDGE_SECRET — nunca o token do Gateway), e então chamar
-// /tools/invoke do Gateway pela rede interna do Docker (nunca pela internet),
-// disparando sessions_spawn para o sub-agente descartável de análise da PR.
+// PRÓPRIO (JARVIS_BRIDGE_SECRET — nunca o token do Gateway/hooks), e então
+// chamar o endpoint nativo /hooks/<path>/agent do OpenClaw pela rede interna
+// do Docker (nunca pela internet), disparando um turno de agente isolado
+// que faz a análise da PR.
 //
 // Propositalmente sem framework/dependências — só `http` nativo do Node.
 
@@ -12,10 +13,11 @@ const http = require('node:http')
 const PORT = process.env.PORT || 8791
 const BRIDGE_SECRET = process.env.JARVIS_BRIDGE_SECRET || ''
 const GATEWAY_URL = process.env.GATEWAY_URL || 'http://openclaw-kx5x-openclaw-1:18789'
-const GATEWAY_TOKEN = process.env.GATEWAY_TOKEN || ''
+const HOOKS_PATH = process.env.HOOKS_PATH || '/hooks-prs-abertas'
+const HOOKS_TOKEN = process.env.HOOKS_TOKEN || ''
 
-if (!BRIDGE_SECRET || !GATEWAY_TOKEN) {
-  console.error('JARVIS_BRIDGE_SECRET e GATEWAY_TOKEN são obrigatórios. Abortando.')
+if (!BRIDGE_SECRET || !HOOKS_TOKEN) {
+  console.error('JARVIS_BRIDGE_SECRET e HOOKS_TOKEN são obrigatórios. Abortando.')
   process.exit(1)
 }
 
@@ -42,57 +44,34 @@ function montarTarefa({ prId, owner, repo, numero }) {
 }
 
 const server = http.createServer(async (req, res) => {
-  if (req.method !== 'POST') {
-    res.writeHead(405).end('method not allowed')
-    return
-  }
+  if (req.method !== 'POST') { res.writeHead(405).end('method not allowed'); return }
 
   const auth = req.headers.authorization || ''
   const token = auth.replace(/^Bearer\s+/i, '')
-  if (!comparacaoConstante(token, BRIDGE_SECRET)) {
-    res.writeHead(401).end('unauthorized')
-    return
-  }
+  if (!comparacaoConstante(token, BRIDGE_SECRET)) { res.writeHead(401).end('unauthorized'); return }
 
   let body = ''
   for await (const chunk of req) body += chunk
 
   let payload
-  try {
-    payload = JSON.parse(body)
-  } catch {
-    res.writeHead(400).end('invalid json')
-    return
-  }
+  try { payload = JSON.parse(body) } catch { res.writeHead(400).end('invalid json'); return }
 
   const { prId, owner, repo, numero } = payload
-  if (!prId || !owner || !repo || !numero) {
-    res.writeHead(400).end('missing fields')
-    return
-  }
+  if (!prId || !owner || !repo || !numero) { res.writeHead(400).end('missing fields'); return }
 
-  // Responde rápido pro pr-webhook (que está esperando o GitHub, não a nós) —
-  // o disparo do sub-agente acontece de forma best-effort, sem bloquear.
   res.writeHead(202).end('accepted')
 
   try {
-    const r = await fetch(`${GATEWAY_URL}/tools/invoke`, {
+    const r = await fetch(`${GATEWAY_URL}${HOOKS_PATH}/agent`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${GATEWAY_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { Authorization: `Bearer ${HOOKS_TOKEN}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        tool: 'sessions_spawn',
-        args: {
-          task: montarTarefa({ prId, owner, repo, numero }),
-          taskName: `pr-analise-${prId}`.slice(0, 60),
-        },
+        message: montarTarefa({ prId, owner, repo, numero }),
+        name: `pr-analise-${prId}`.slice(0, 60),
+        deliver: false,
       }),
     })
-    if (!r.ok) {
-      console.error('gateway respondeu', r.status, await r.text().catch(() => ''))
-    }
+    if (!r.ok) console.error('gateway respondeu', r.status, await r.text().catch(() => ''))
   } catch (e) {
     console.error('falha ao chamar o gateway:', e)
   }
